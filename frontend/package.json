@@ -1,0 +1,46 @@
+{
+  "name": "campus-growth-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Campus growth mini program frontend built with Taro React.",
+  "scripts": {
+    "build:weapp": "taro build --type weapp",
+    "dev:weapp": "npm run build:weapp -- --watch",
+    "build:h5": "taro build --type h5",
+    "dev:h5": "npm run build:h5 -- --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "browserslist": [
+    "defaults and fully supports es6-module",
+    "maintained node versions"
+  ],
+  "dependencies": {
+    "@babel/runtime": "^7.28.4",
+    "@tarojs/components": "4.1.11",
+    "@tarojs/helper": "4.1.11",
+    "@tarojs/plugin-framework-react": "4.1.11",
+    "@tarojs/plugin-platform-h5": "4.1.11",
+    "@tarojs/plugin-platform-weapp": "4.1.11",
+    "@tarojs/react": "4.1.11",
+    "@tarojs/runtime": "4.1.11",
+    "@tarojs/shared": "4.1.11",
+    "@tarojs/taro": "4.1.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.28.4",
+    "@babel/preset-react": "^7.27.1",
+    "@types/node": "^22.18.6",
+    "@types/react": "^18.3.24",
+    "@vitejs/plugin-react": "^4.7.0",
+    "@tarojs/cli": "4.1.11",
+    "@tarojs/vite-runner": "4.1.11",
+    "babel-preset-taro": "4.1.11",
+    "postcss": "^8.5.6",
+    "sass": "^1.92.1",
+    "terser": "^5.44.0",
+    "typescript": "^5.9.2",
+    "vite": "^4.5.14"
+  }
+}
