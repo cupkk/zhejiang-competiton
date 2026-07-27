@@ -1,0 +1,18 @@
+[Unit]
+Description=Campus Growth API
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=campus
+Group=campus
+WorkingDirectory=/opt/campus-growth/current
+EnvironmentFile=/etc/campus-growth/api.env
+ExecStart=/usr/local/bin/npm run start:api
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

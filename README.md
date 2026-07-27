@@ -1,155 +1,76 @@
-# 校园成长小程序
+# Campus Growth
 
-当前仓库已经切到“小程序前端 + 正式后端骨架”的开发阶段：
+校园竞赛与资源协作平台仓库，当前由两部分组成：
 
-- `frontend/`：Taro React 微信小程序前端
-- `server/`：Express + TypeScript + SQLite 后端
-- `src/`：旧版 Web 原型，仅保留作界面参考
+- `frontend/`: 新的前端基线，来自 Figma Make 导出的 React + Vite 移动端界面。
+- `server/`: Express + SQLite 后端，承载登录、竞赛、资源、组队、社区、订单与支付链路。
 
-## 后端现状
+## 当前约定
 
-后端已经不是内存演示态，当前具备：
+- 以后新的界面基线以 `frontend/` 为准。
+- `frontend/src/types` 与 `frontend/src/data/mock.ts` 同时作为后端共享类型和种子数据来源。
+- 旧的根目录 Web 界面已经移除，不再作为前端主工程。
 
-- SQLite 持久化
-- 微信登录服务入口
-- 服务端会话表
-- 竞赛 / 资源 / 组队主链路读写
-- 评论 / 点赞 / 举报
-- 审核任务队列
-- 资源下载授权
-- 支付回调入口
+## 运行方式
 
-说明：
+### 推荐：本地一键启动
 
-- `WECHAT_LOGIN_MODE=hybrid` 时，已配置 `WECHAT_APP_ID` 和 `WECHAT_APP_SECRET` 会优先走真实 `code2Session`
-- 未配置时会回退到本地 mock openid，方便本地联调
-- 支付回调当前已接订单状态机、资源到账和通知链路，但还没有接微信支付 v3 证书验签
+```bash
+npm run dev:local
+```
 
-## 本地启动
+该命令使用独立的 `server/data/campus-growth-local-preview.db`，自动准备浙江大学和复旦大学的用户、帖子、问答、组队及学校管理员测试数据，然后启动：
 
-安装依赖：
+- 用户端：`http://127.0.0.1:3001/`
+- API 健康检查：`http://127.0.0.1:8080/api/health`
+
+本地学校管理员账号为 `local_zju_admin`、`local_fdu_admin`，密码均为 `LocalTest123!`。种子脚本会拒绝 PostgreSQL 和非本地预览数据库路径。
+
+服务启动后可执行核心闭环测试：
+
+```bash
+npm run test:local-core
+```
+
+上线前本地固定检查（需先保持 `npm run dev:local` 运行）：
+
+```bash
+npm run verify:local-release
+```
+
+该命令依次执行服务端类型检查、前端类型检查、双学校权限与审核矩阵、生产构建。
+
+### 1. 安装根依赖
 
 ```bash
 npm install
+```
+
+### 2. 安装前端依赖
+
+```bash
 cd frontend
 npm install
-cd ..
 ```
 
-启动后端：
+### 3. 启动前端
 
 ```bash
-npm run start:api
+npm run dev:frontend
 ```
 
-默认地址：
-
-```text
-http://127.0.0.1:8080/api
-```
-
-启动小程序前端：
+### 4. 启动后端
 
 ```bash
-cd frontend
-npm run dev:weapp
+npm run dev:api
 ```
 
-然后用微信开发者工具导入：
+默认后端地址为 `http://127.0.0.1:8080/api`。
 
-```text
-D:\github\zhejiang-competiton\frontend
-```
+## 目录说明
 
-## 环境变量
-
-见 [.env.example](/d:/github/zhejiang-competiton/.env.example)。
-
-核心配置：
-
-```text
-API_PORT=8080
-API_BASE_PATH=/api
-DB_PATH=server/data/campus-growth.db
-SESSION_TTL_DAYS=7
-ADMIN_API_KEY=dev-admin-key
-
-WECHAT_LOGIN_MODE=hybrid
-WECHAT_APP_ID=
-WECHAT_APP_SECRET=
-WECHAT_PAY_NOTIFY_SECRET=
-```
-
-## 已接通接口
-
-主链路：
-
-- `POST /auth/wechat/login`
-- `GET /users/me`
-- `GET /feeds/home`
-- `GET /competitions`
-- `GET /competitions/:id`
-- `GET /competitions/:id/resources`
-- `GET /competitions/:id/teams`
-- `PATCH /competitions/:id/favorite`
-- `POST /competitions/:id/enrollments`
-- `GET /resources`
-- `GET /resources/:id`
-- `PATCH /resources/:id/favorite`
-- `POST /resources/:id/acquisitions`
-- `POST /resources/:id/downloads`
-- `GET /downloads/:grantId`
-- `GET /users/resources`
-- `GET /orders`
-- `GET /teams`
-- `GET /teams/:id`
-- `POST /teams`
-- `POST /teams/:id/applications`
-
-社区与审核：
-
-- `GET /posts`
-- `GET /posts/:id`
-- `POST /posts`
-- `GET /posts/:id/comments`
-- `POST /posts/:id/comments`
-- `PATCH /posts/:id/like`
-- `PATCH /comments/:id/like`
-- `POST /reports`
-- `GET /reports`
-- `GET /moderation/tasks`
-- `PATCH /moderation/tasks/:id`
-
-辅助能力：
-
-- `GET /notifications`
-- `GET /search/suggestions`
-- `GET /search`
-- `GET /ai/bootstrap`
-- `POST /ai/reply`
-- `POST /payments/wechat/notify`
-
-## 当前验证
-
-已实际验证通过：
-
-- 登录与会话读取
-- 首页聚合读取
-- 竞赛收藏 / 报名
-- 资源下单 / 支付回调 / 下载授权
-- 发帖 / 评论 / 点赞 / 举报
-- 审核任务查询与处理
-- `401` 未登录返回
-- 根目录 `npm run lint`
-- 小程序前端 `npm run typecheck`
-- 小程序前端 `npm run build:weapp`
-
-## 下一步
-
-继续往正式后端推进时，优先级建议是：
-
-1. 把微信登录从 `hybrid` 切到真实生产模式
-2. 接微信支付 v3 签名验签和下单接口
-3. 给审核后台补操作页面和管理员用户体系
-4. 给资源下载接真实对象存储 / CDN
-5. 增加测试、CI 和部署脚本
+- `frontend/docs/frontend-baseline.md`: 新前端结构审计、问题和后续任务。
+- `frontend/src/app`: Figma Make 导出的页面、布局和导航。
+- `frontend/src/types`: 与后端共享的业务实体与接口类型。
+- `frontend/src/data/mock.ts`: 种子数据与演示数据。
+- `server/`: API、数据库、审核、上传、支付与下载逻辑。

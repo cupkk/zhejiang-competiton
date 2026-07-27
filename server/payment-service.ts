@@ -22,7 +22,8 @@ import {
   run,
 } from './helpers.ts';
 import { getResourceDetail } from './catalog-service.ts';
-import type { OrderRow, OwnedResourceRow, UserRow } from './models.ts';
+import type { OrderRow, OwnedResourceRow, ResourceAssetRow, UserRow } from './models.ts';
+import { readResourceAssetContent } from './storage-service.ts';
 
 interface OrderRecord extends OrderRow {
   payment_ref?: string | null;
@@ -30,7 +31,7 @@ interface OrderRecord extends OrderRow {
 
 interface DownloadFilePayload {
   filename: string;
-  content: string;
+  content: Buffer | string;
   contentType: string;
 }
 
@@ -65,7 +66,7 @@ function getOrderForUser(userId: string, orderId: string) {
 function getUserOpenId(userId: string) {
   const user = getOne<UserRow>(
     `
-      SELECT id, open_id, union_id, session_key, name, mark, school, major, grade, bio, focus_tags_json
+      SELECT id, open_id, union_id, session_key, name, mark, avatar_url, school, major, grade, bio, focus_tags_json
       FROM users
       WHERE id = @userId
     `,
@@ -180,7 +181,7 @@ function finalizeOrderPaid(order: OrderRecord, transactionId?: string | null, pa
     content: `订单《${order.title}》已支付成功，资源权限会自动同步到账户。`,
     linkType: resource ? 'resource' : 'post',
     linkId: resource?.id,
-    ctaText: resource ? '鏌ョ湅璧勬簮' : '鏌ョ湅璁㈠崟',
+    ctaText: resource ? '查看资源' : '查看订单',
   });
 
   return {
@@ -194,7 +195,7 @@ function markOrderRefundProcessing(order: OrderRecord, payloadJson?: string | nu
   run(
     `
       UPDATE orders
-      SET status = '閫€娆句腑',
+      SET status = '退款中',
           notify_payload_json = COALESCE(@notifyPayloadJson, notify_payload_json),
           updated_at = @updatedAt
       WHERE id = @orderId
@@ -210,7 +211,7 @@ function markOrderRefundProcessing(order: OrderRecord, payloadJson?: string | nu
 function notifyOrderRefundProcessing(order: OrderRecord) {
   pushNotification(order.user_id, {
     category: '订单',
-    title: '閫€娆剧敵璇峰凡鎻愪氦',
+    title: '退款申请已提交',
     content: `订单《${order.title}》已经进入退款处理流程，进度会继续在消息中心和退款结果页同步。`,
     linkType: 'order',
     linkId: order.id,
@@ -258,7 +259,7 @@ function finalizeOrderRefunded(order: OrderRecord, refundId?: string | null, pay
 
   pushNotification(order.user_id, {
     category: '订单',
-    title: '閫€娆惧凡瀹屾垚',
+    title: '退款已完成',
     content: `订单《${order.title}》已完成退款，相关资源权限也会同步回收。`,
     linkType: 'order',
     linkId: order.id,
@@ -296,8 +297,25 @@ function scheduleMockRefundCompletion(order: OrderRecord, outRefundNo: string) {
   mockRefundTimers.set(order.id, timer);
 }
 
+function getResourceAssetForDownload(resourceId: string) {
+  return getOne<ResourceAssetRow>(
+    `
+      SELECT ra.id, ra.user_id, ra.storage_provider, ra.storage_key, ra.local_path, ra.original_name, ra.file_name, ra.content_type, ra.size_bytes, ra.created_at
+      FROM resources r
+      JOIN resource_assets ra ON ra.id = r.file_asset_id
+      WHERE r.id = @resourceId
+    `,
+    { resourceId }
+  );
+}
+
 export function createResourceDownload(userId: string, resourceId: string): ResourceDownloadResult {
   const resource = getResourceDetail(resourceId, userId);
+  const asset = getResourceAssetForDownload(resourceId);
+  if (!asset) {
+    throw new Error('resource_file_missing');
+  }
+
   const accessStatus = resource.viewer?.accessStatus ?? 'not_acquired';
 
   if (accessStatus !== 'owned') {
@@ -324,44 +342,44 @@ export function createResourceDownload(userId: string, resourceId: string): Reso
     grantId: grant.grantId,
     downloadUrl: grant.downloadUrl,
     expiresAt: grant.expiresAt,
-    filename: `${resource.title}.txt`,
+    filename: asset.original_name,
   };
 }
 
 export function getDownloadGrant(userId: string, grantId: string): ResourceDownloadResult {
   const grant = getDownloadGrantRow(grantId, userId);
   const resource = getResourceDetail(grant.resource_id, userId);
+  const asset = getResourceAssetForDownload(grant.resource_id);
   return {
     grantId: grant.id,
     downloadUrl: grant.download_url,
     expiresAt: grant.expires_at,
-    filename: `${resource.title}.txt`,
+    filename: asset?.original_name || `${resource.title}.txt`,
   };
 }
 
-export function getDownloadFilePayload(userId: string, grantId: string): DownloadFilePayload {
+export async function getDownloadFilePayload(userId: string, grantId: string): Promise<DownloadFilePayload> {
   const grant = getDownloadGrantRow(grantId, userId);
-  const resource = getResourceDetail(grant.resource_id, userId);
+  getResourceDetail(grant.resource_id, userId);
+  const asset = getResourceAssetForDownload(grant.resource_id);
 
-  return {
-    filename: `${resource.title}.txt`,
-    contentType: 'text/plain; charset=utf-8',
-    content: [
-      `资源标题：${resource.title}`,
-      `资源类型：${resource.type}`,
-      `下载授权：${grant.id}`,
-      `授权失效：${grant.expires_at || '长期有效'}`,
-      '',
-      '当前仓库已经接通下载授权链路，这里返回的是联调用占位内容。',
-      '后续接入对象存储或文件服务后，可以把这里替换成真实文件流。',
-      '',
-      '预览要点：',
-      ...resource.previewPoints.map((item, index) => `${index + 1}. ${item}`),
-    ].join('\n'),
-  };
+  if (asset) {
+    const file = await readResourceAssetContent(asset.id);
+    return {
+      filename: asset.original_name,
+      contentType: asset.content_type,
+      content: file.content,
+    };
+  }
+
+  throw new Error('resource_file_missing');
 }
 
 export async function createOrderPayment(userId: string, orderId: string): Promise<OrderPayResult> {
+  if (!serverConfig.paymentsEnabled) {
+    throw new Error('payments_disabled');
+  }
+
   const order = getOrderForUser(userId, orderId);
 
   if (order.status === '已完成') {
@@ -399,6 +417,10 @@ export async function createOrderRefund(
   orderId: string,
   payload: OrderRefundPayload = {}
 ): Promise<OrderRefundResult> {
+  if (!serverConfig.paymentsEnabled) {
+    throw new Error('payments_disabled');
+  }
+
   const order = getOrderForUser(userId, orderId);
   const refundMode: OrderRefundResult['refundMode'] = shouldUseRealWechatPay() ? 'wechat_pay_v3' : 'mock';
 

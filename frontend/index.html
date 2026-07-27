@@ -1,0 +1,85 @@
+
+  <!DOCTYPE html>
+  <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+      <meta name="theme-color" content="#f6f7f9" />
+      <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="%230A84FF"/><path d="M17 26l15-8 15 8-15 8-15-8z" fill="white"/><path d="M23 33v8c0 3 18 3 18 0v-8l-9 5-9-5z" fill="white" opacity=".9"/></svg>' />
+	      <title>校园小程序</title>
+	      <style>
+	        html,
+	        body,
+	        #root {
+	          min-height: 100%;
+	          width: 100%;
+	          max-width: 100%;
+	          overflow-x: hidden;
+	        }
+
+	        body {
+	          margin: 0;
+	          background: #f5f6f8;
+	          color: #111827;
+	          font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+	          -webkit-font-smoothing: antialiased;
+	          -webkit-tap-highlight-color: transparent;
+	          touch-action: pan-y;
+	        }
+
+	        #root {
+	          width: 100%;
+	          max-width: 430px;
+	          margin: 0 auto;
+	          background: #f6f7f9;
+	          overflow-x: hidden;
+	        }
+
+	        a {
+	          color: #0a84ff;
+	          text-decoration: none;
+	        }
+
+	        input:not([type="checkbox"]):not([type="radio"]),
+	        textarea,
+	        select {
+	          box-sizing: border-box;
+	          min-height: 44px;
+	          border-radius: 10px;
+	          font: inherit;
+	          font-size: 16px;
+	          max-width: 100%;
+	        }
+
+	        input:not([type="checkbox"]):not([type="radio"]),
+	        textarea,
+	        select {
+	          width: 100%;
+	          border: 1px solid #d7dce3;
+	          background: #ffffff;
+	          color: #111827;
+	          padding: 10px 12px;
+	        }
+
+	        input[type="checkbox"],
+	        input[type="radio"] {
+	          width: 16px;
+	          height: 16px;
+	          min-height: 0;
+	          flex: 0 0 16px;
+	          padding: 0;
+	        }
+
+	        button {
+	          font: inherit;
+	        }
+	      </style>
+    </head>
+
+    <body>
+      <div id="root"></div>
+      <script src="https://res.wx.qq.com/open/js/jweixin-1.6.0.js"></script>
+      <script type="module" src="/src/main.tsx"></script>
+    </body>
+  </html>
+  

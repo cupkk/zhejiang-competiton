@@ -19,11 +19,12 @@ function createDefaultProfileSeed(openId: string) {
     id: createId('u'),
     name: `微信用户${suffix}`,
     mark: suffix.slice(0, 1) || '新',
+    avatarUrl: '',
     school: '待补充学校',
     major: '待补充专业',
     grade: '待补充年级',
-    bio: '完成竞赛、资源和组队信息后，这里会逐步沉淀你的校园成长轨迹。',
-    focusTags: ['校园成长', '竞赛', '组队'],
+    bio: '',
+    focusTags: [],
   };
 }
 
@@ -32,7 +33,7 @@ export async function loginWithWechatCode(code: string): Promise<LoginSession> {
 
   let user = getOne<UserRow>(
     `
-      SELECT id, open_id, union_id, session_key, name, mark, school, major, grade, bio, focus_tags_json
+      SELECT id, open_id, union_id, session_key, name, mark, avatar_url, school, major, grade, bio, focus_tags_json
       FROM users
       WHERE open_id = @openId
     `,
@@ -44,9 +45,9 @@ export async function loginWithWechatCode(code: string): Promise<LoginSession> {
     run(
       `
         INSERT INTO users (
-          id, open_id, union_id, session_key, name, mark, school, major, grade, bio, focus_tags_json, created_at, updated_at
+          id, open_id, union_id, session_key, name, mark, avatar_url, school, major, grade, bio, focus_tags_json, created_at, updated_at
         ) VALUES (
-          @id, @openId, @unionId, @sessionKey, @name, @mark, @school, @major, @grade, @bio, @focusTagsJson, @createdAt, @updatedAt
+          @id, @openId, @unionId, @sessionKey, @name, @mark, @avatarUrl, @school, @major, @grade, @bio, @focusTagsJson, @createdAt, @updatedAt
         )
       `,
       {
@@ -56,6 +57,7 @@ export async function loginWithWechatCode(code: string): Promise<LoginSession> {
         sessionKey: identity.sessionKey || null,
         name: profile.name,
         mark: profile.mark,
+        avatarUrl: profile.avatarUrl,
         school: profile.school,
         major: profile.major,
         grade: profile.grade,

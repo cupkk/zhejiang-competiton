@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Campus Growth competition news sync daily
+
+[Timer]
+OnCalendar=*-*-* 07:30:00
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target

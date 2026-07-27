@@ -1,36 +1,18 @@
 {
   "compilerOptions": {
-    "target": "es2017",
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "removeComments": false,
-    "preserveConstEnums": true,
-    "experimentalDecorators": true,
-    "noImplicitAny": false,
-    "allowSyntheticDefaultImports": true,
-    "outDir": "lib",
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "strictNullChecks": true,
-    "sourceMap": true,
-    "rootDir": ".",
-    "jsx": "react-jsx",
-    "allowJs": true,
-    "resolveJsonModule": true,
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
     "skipLibCheck": true,
-    "baseUrl": ".",
-    "typeRoots": [
-      "node_modules/@types"
-    ],
-    "paths": {
-      "@/*": [
-        "./src/*"
-      ]
-    }
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "types": ["react", "react-dom"]
   },
-  "include": [
-    "./src",
-    "./config"
-  ],
-  "compileOnSave": false
+  "include": ["src", "vite.config.ts"]
 }

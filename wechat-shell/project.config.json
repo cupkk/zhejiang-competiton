@@ -1,0 +1,28 @@
+{
+  "appid": "wxda8641cd650537a4",
+  "projectname": "campus-growth-shell",
+  "compileType": "miniprogram",
+  "libVersion": "3.7.12",
+  "srcMiniprogramRoot": "./",
+  "setting": {
+    "urlCheck": true,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "uglifyFileName": false,
+    "checkSiteMap": true,
+    "minifyWXML": true
+  },
+  "condition": {
+    "miniprogram": {
+      "list": [
+        {
+          "name": "校园成长平台",
+          "pathName": "pages/webview/index",
+          "query": ""
+        }
+      ]
+    }
+  }
+}

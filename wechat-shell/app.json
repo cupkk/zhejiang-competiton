@@ -1,0 +1,12 @@
+{
+  "pages": ["pages/webview/index"],
+  "window": {
+    "navigationBarTitleText": "校园成长",
+    "navigationBarBackgroundColor": "#F6F8FB",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#F6F8FB",
+    "backgroundTextStyle": "dark"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

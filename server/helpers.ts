@@ -8,12 +8,16 @@ import type {
   TeamApplicationStatus,
   UserProfile,
 } from '../frontend/src/types/entities';
+import type { AdminProfile } from '../frontend/src/types/api';
 import { serverConfig } from './config.ts';
 import { db } from './db.ts';
 import type {
+  AdminAuditLogRow,
   CommentRow,
   CompetitionRow,
   DownloadGrantRow,
+  AdminSessionRow,
+  AdminUserRow,
   ModerationTaskItem,
   ModerationTaskRow,
   NotificationRow,
@@ -21,9 +25,12 @@ import type {
   OwnedResourceRow,
   PostCommentItem,
   PostRow,
+  ReportRow,
   ResourceRow,
   SessionRow,
+  SchoolRow,
   TeamRow,
+  UserSchoolMembershipRow,
   UserRow,
 } from './models.ts';
 
@@ -87,10 +94,22 @@ export function justNowLabel() {
   return '刚刚';
 }
 
+export function isLikelyCorruptText(value: string | null | undefined) {
+  const compact = value?.trim() ?? '';
+  if (!compact) {
+    return false;
+  }
+
+  const questionMarks = compact.match(/\?/g)?.length ?? 0;
+  const meaningfulText = compact.replace(/[?\s.,，。!！:：;；、'"“”‘’()[\]（）-]/g, '');
+  return questionMarks >= 3 && meaningfulText.length === 0;
+}
+
 export function getUserRowById(userId: string) {
   const user = getOne<UserRow>(
     `
-      SELECT id, open_id, union_id, session_key, name, mark, school, major, grade, bio, focus_tags_json
+      SELECT id, open_id, union_id, session_key, name, mark, avatar_url, school, major, grade, bio, focus_tags_json,
+             points, checkin_streak, last_checkin_date
       FROM users
       WHERE id = @userId
     `,
@@ -104,8 +123,165 @@ export function getUserRowById(userId: string) {
   return user;
 }
 
+export function getSchoolRowById(schoolId: string) {
+  const school = getOne<SchoolRow>(
+    `
+      SELECT id, source_id, code, name, short_name, province, city, logo_url, is_open, is_hot, sort_order, created_at, updated_at
+      FROM schools
+      WHERE id = @schoolId
+    `,
+    { schoolId }
+  );
+
+  if (!school) {
+    throw new Error('school_not_found');
+  }
+
+  return school;
+}
+
+export function getSchoolRowByName(name: string) {
+  const value = name.trim();
+  if (!value) {
+    return null;
+  }
+
+  return getOne<SchoolRow>(
+    `
+      SELECT id, source_id, code, name, short_name, province, city, logo_url, is_open, is_hot, sort_order, created_at, updated_at
+      FROM schools
+      WHERE name = @name
+      ORDER BY is_hot DESC,
+               CASE WHEN id LIKE 'sch_%' THEN 0 ELSE 1 END,
+               sort_order ASC,
+               id ASC
+      LIMIT 1
+    `,
+    { name: value }
+  );
+}
+
+export function getActiveSchoolMembership(userId: string) {
+  return getOne<UserSchoolMembershipRow>(
+    `
+      SELECT id, user_id, school_id, school_name, role, certification_status, education_email, phone,
+             email_verified, phone_verified, active, verified_at, created_at, updated_at
+      FROM user_school_memberships
+      WHERE user_id = @userId AND active = 1
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    { userId }
+  );
+}
+
+export function getActiveSchoolId(userId: string | undefined) {
+  return userId ? getActiveSchoolMembership(userId)?.school_id ?? null : null;
+}
+
+export function getVerifiedActiveSchoolId(userId: string | undefined) {
+  if (!userId) return null;
+  const membership = getActiveSchoolMembership(userId);
+  if (
+    !membership ||
+    membership.certification_status !== 'verified' ||
+    !membership.email_verified ||
+    !membership.phone_verified
+  ) {
+    return null;
+  }
+  return membership.school_id;
+}
+
+export function getRequiredVerifiedSchoolId(userId: string) {
+  const membership = getActiveSchoolMembership(userId);
+  if (!membership) throw new Error('user_school_required');
+  const schoolId = getVerifiedActiveSchoolId(userId);
+  if (!schoolId) throw new Error('school_verification_required');
+  return schoolId;
+}
+
+export function isContentAccessible(
+  row: { content_scope?: string | null; school_id?: string | null },
+  userId?: string
+) {
+  if (row.content_scope === 'platform') return true;
+  if (row.content_scope !== 'school' || !row.school_id) return false;
+  return getVerifiedActiveSchoolId(userId) === row.school_id;
+}
+
+export function requireContentAccessible<T extends { content_scope?: string | null; school_id?: string | null }>(
+  row: T,
+  userId?: string
+) {
+  if (!isContentAccessible(row, userId)) throw new Error('content_not_available');
+  return row;
+}
+
+export function isNotificationTargetAccessible(
+  row: Pick<NotificationRow, 'link_type' | 'link_id'>,
+  userId: string
+) {
+  if (!row.link_id || row.link_type === 'order') return true;
+
+  const tableByLinkType = {
+    competition: 'competitions',
+    resource: 'resources',
+    team: 'teams',
+    post: 'posts',
+  } as const;
+  const table = tableByLinkType[row.link_type as keyof typeof tableByLinkType];
+  if (!table) return false;
+
+  const target = getOne<{ school_id: string | null; content_scope: string }>(
+    `SELECT school_id, content_scope FROM ${table} WHERE id = @id`,
+    { id: row.link_id }
+  );
+  return Boolean(target && isContentAccessible(target, userId));
+}
+
+export function countAccessibleUnreadNotifications(userId: string) {
+  return getAll<Pick<NotificationRow, 'link_type' | 'link_id'>>(
+    `SELECT link_type, link_id FROM notifications WHERE user_id = @userId AND unread = 1`,
+    { userId }
+  ).filter((row) => isNotificationTargetAccessible(row, userId)).length;
+}
+
+export function getAdminUserById(adminUserId: string) {
+  const admin = getOne<AdminUserRow>(
+    `
+      SELECT id, username, password_hash, display_name, role, permissions_json, school_id, school_name, status, created_at, updated_at
+      FROM admin_users
+      WHERE id = @adminUserId
+    `,
+    { adminUserId }
+  );
+
+  if (!admin) {
+    throw new Error('admin_user_not_found');
+  }
+
+  return admin;
+}
+
+export function buildAdminProfile(adminUserId: string): AdminProfile {
+  const admin = getAdminUserById(adminUserId);
+
+  return {
+    id: admin.id,
+    username: admin.username,
+    displayName: admin.display_name,
+    role: admin.role,
+    permissions: parseJsonArray(admin.permissions_json),
+    scope: admin.role === 'school_admin' ? 'school' : 'platform',
+    schoolId: admin.school_id || undefined,
+    schoolName: admin.school_name || undefined,
+  };
+}
+
 export function buildCurrentUser(userId: string): UserProfile {
   const user = getUserRowById(userId);
+  const activeSchool = getActiveSchoolMembership(userId);
   const favoriteRow = getOne<{ count: number }>(`SELECT COUNT(*) AS count FROM favorites WHERE user_id = @userId`, {
     userId,
   });
@@ -119,34 +295,36 @@ export function buildCurrentUser(userId: string): UserProfile {
         SELECT ta.team_id AS id
         FROM team_applications ta
         WHERE ta.user_id = @userId
-      )
+      ) AS related_teams
     `,
     { userId }
   );
   const resourceRow = getOne<{ count: number }>(`SELECT COUNT(*) AS count FROM owned_resources WHERE user_id = @userId`, {
     userId,
   });
-  const unreadRow = getOne<{ count: number }>(
-    `SELECT COUNT(*) AS count FROM notifications WHERE user_id = @userId AND unread = 1`,
-    { userId }
-  );
+  const unreadMessages = countAccessibleUnreadNotifications(userId);
 
   return {
     id: user.id,
     name: user.name,
     mark: user.mark,
-    school: user.school,
+    avatarUrl: user.avatar_url || undefined,
+    school: activeSchool?.school_name || user.school,
+    schoolId: activeSchool?.school_id || undefined,
+    schoolCertificationStatus: activeSchool?.certification_status ?? 'unverified',
     major: user.major,
     grade: user.grade,
-    bio: user.bio,
-    focusTags: parseJsonArray<string>(user.focus_tags_json),
-    stats: {
-      favorites: favoriteRow?.count ?? 0,
-      teams: teamRow?.count ?? 0,
-      resources: resourceRow?.count ?? 0,
-      unreadMessages: unreadRow?.count ?? 0,
-    },
-  };
+      bio: user.bio,
+      focusTags: parseJsonArray<string>(user.focus_tags_json),
+      stats: {
+        favorites: favoriteRow?.count ?? 0,
+        teams: teamRow?.count ?? 0,
+        resources: resourceRow?.count ?? 0,
+        unreadMessages,
+        points: Number(user.points || 0),
+        checkinStreak: Number(user.checkin_streak || 0),
+      },
+    };
 }
 
 export function pushNotification(
@@ -176,6 +354,49 @@ export function pushNotification(
       ctaText: item.ctaText,
       createdAt: nowIso(),
     }
+  );
+}
+
+export function createAdminAuditLog(params: {
+  adminUserId: string;
+  action: string;
+  targetType?: string | null;
+  targetId?: string | null;
+  detail?: unknown;
+  ip?: string | null;
+  userAgent?: string | null;
+}) {
+  run(
+    `
+      INSERT INTO admin_audit_logs (
+        id, admin_user_id, action, target_type, target_id, detail_json, ip, user_agent, created_at
+      ) VALUES (
+        @id, @adminUserId, @action, @targetType, @targetId, @detailJson, @ip, @userAgent, @createdAt
+      )
+    `,
+    {
+      id: createId('audit'),
+      adminUserId: params.adminUserId,
+      action: params.action,
+      targetType: params.targetType || null,
+      targetId: params.targetId || null,
+      detailJson: params.detail ? JSON.stringify(params.detail) : null,
+      ip: params.ip || null,
+      userAgent: params.userAgent || null,
+      createdAt: nowIso(),
+    }
+  );
+}
+
+export function listAdminAuditLogs(limit = 50) {
+  return getAll<AdminAuditLogRow>(
+    `
+      SELECT id, admin_user_id, action, target_type, target_id, detail_json, ip, user_agent, created_at
+      FROM admin_audit_logs
+      ORDER BY created_at DESC
+      LIMIT @limit
+    `,
+    { limit }
   );
 }
 
@@ -247,6 +468,8 @@ export function mapOrder(row: OrderRow): OrderItem {
 export function mapPost(row: PostRow, userId?: string): PostItem {
   return {
     id: row.id,
+    schoolId: row.school_id || undefined,
+    contentScope: row.content_scope === 'platform' ? 'platform' : 'school',
     title: row.title,
     excerpt: row.excerpt,
     content: parseJsonArray<string>(row.content_json),
@@ -259,9 +482,13 @@ export function mapPost(row: PostRow, userId?: string): PostItem {
     time: row.time_label,
     relatedCompetitionId: row.related_competition_id || undefined,
     relatedResourceId: row.related_resource_id || undefined,
+    questionStatus: row.question_status === 'resolved' ? 'resolved' : 'open',
+    acceptedCommentId: row.accepted_comment_id || undefined,
+    moderationStatus: row.moderation_status as PostItem['moderationStatus'],
     viewer: {
       isLiked: isPostLiked(userId, row.id),
       isFavorited: isFavorited(userId, 'post', row.id),
+      isOwner: Boolean(userId && row.author_user_id === userId),
     },
   };
 }
@@ -271,6 +498,7 @@ export function mapComment(
   isLiked: boolean,
   options: {
     replyToAuthorName?: string;
+    isAccepted?: boolean;
   } = {}
 ): PostCommentItem {
   return {
@@ -286,6 +514,7 @@ export function mapComment(
     status: row.moderation_status as PostCommentItem['status'],
     createdAt: row.created_at,
     replyCount: 0,
+    isAccepted: options.isAccepted,
     replies: [],
     viewer: {
       isLiked,
@@ -293,11 +522,257 @@ export function mapComment(
   };
 }
 
+function extractSourceUrlFromContent(contentJson: string | null | undefined) {
+  if (!contentJson) {
+    return undefined;
+  }
+
+  try {
+    const paragraphs = JSON.parse(contentJson) as string[];
+    if (!Array.isArray(paragraphs)) {
+      return undefined;
+    }
+
+    const sourceLine = paragraphs.find((item) => /^原文[:：]\s*https?:\/\//.test(item.trim()));
+    return sourceLine?.replace(/^原文[:：]\s*/, '').trim();
+  } catch {
+    return undefined;
+  }
+}
+
+export function getContentSchoolInfo(
+  targetType: ModerationTaskRow['target_type'] | ReportRow['target_type'],
+  targetId: string
+) {
+  if (targetType === 'resource') {
+    const target = getOne<{ school_id: string | null; school_name: string | null }>(
+      `
+        SELECT r.school_id, s.name AS school_name
+        FROM resources r
+        LEFT JOIN schools s ON s.id = r.school_id
+        WHERE r.id = @targetId
+      `,
+      { targetId }
+    );
+    return {
+      schoolId: target?.school_id || undefined,
+      schoolName: target?.school_name || undefined,
+    };
+  }
+
+  if (targetType === 'post') {
+    const target = getOne<{ school_id: string | null; school_name: string | null }>(
+      `
+        SELECT p.school_id, s.name AS school_name
+        FROM posts p
+        LEFT JOIN schools s ON s.id = p.school_id
+        WHERE p.id = @targetId
+      `,
+      { targetId }
+    );
+    return {
+      schoolId: target?.school_id || undefined,
+      schoolName: target?.school_name || undefined,
+    };
+  }
+
+  if (targetType === 'team') {
+    const target = getOne<{ school_id: string | null; school_name: string | null }>(
+      `
+        SELECT t.school_id, s.name AS school_name
+        FROM teams t
+        LEFT JOIN schools s ON s.id = t.school_id
+        WHERE t.id = @targetId
+      `,
+      { targetId }
+    );
+    return {
+      schoolId: target?.school_id || undefined,
+      schoolName: target?.school_name || undefined,
+    };
+  }
+
+  if (targetType === 'comment') {
+    const target = getOne<{ school_id: string | null; school_name: string | null }>(
+      `
+        SELECT p.school_id, s.name AS school_name
+        FROM comments c
+        JOIN posts p ON p.id = c.post_id
+        LEFT JOIN schools s ON s.id = p.school_id
+        WHERE c.id = @targetId
+      `,
+      { targetId }
+    );
+    return {
+      schoolId: target?.school_id || undefined,
+      schoolName: target?.school_name || undefined,
+    };
+  }
+
+  if (targetType === 'report') {
+    const report = getOne<{ target_type: ReportRow['target_type']; target_id: string }>(
+      `
+        SELECT target_type, target_id
+        FROM reports
+        WHERE id = @targetId
+      `,
+      { targetId }
+    );
+    return report ? getContentSchoolInfo(report.target_type, report.target_id) : {};
+  }
+
+  return {};
+}
+
+function getModerationTargetSummary(row: ModerationTaskRow) {
+  const school = getContentSchoolInfo(row.target_type, row.target_id);
+
+  if (row.target_type === 'resource') {
+    const target = getOne<{
+      title: string;
+      type: string;
+      category: string;
+      author_name: string;
+      source_url: string | null;
+      moderation_status: string;
+    }>(
+      `
+        SELECT title, type, category, author_name, source_url, moderation_status
+        FROM resources
+        WHERE id = @targetId
+      `,
+      { targetId: row.target_id }
+    );
+    return target
+      ? {
+          ...school,
+          targetTitle: target.title,
+          targetSummary: `${target.category} / ${target.type}`,
+          targetOwner: target.author_name,
+          targetStatus: target.moderation_status,
+          targetSourceUrl: target.source_url || undefined,
+        }
+      : {};
+  }
+
+  if (row.target_type === 'post') {
+    const target = getOne<{
+      title: string;
+      excerpt: string;
+      category: string;
+      author_name: string;
+      content_json: string;
+      moderation_status: string;
+    }>(
+      `
+        SELECT title, excerpt, category, author_name, content_json, moderation_status
+        FROM posts
+        WHERE id = @targetId
+      `,
+      { targetId: row.target_id }
+    );
+    return target
+      ? {
+          ...school,
+          targetTitle: target.title,
+          targetSummary: `${target.category} / ${target.excerpt}`,
+          targetOwner: target.author_name,
+          targetStatus: target.moderation_status,
+          targetSourceUrl: extractSourceUrlFromContent(target.content_json),
+        }
+      : {};
+  }
+
+  if (row.target_type === 'team') {
+    const target = getOne<{
+      title: string;
+      comp_name: string;
+      author_name: string;
+      moderation_status: string;
+      visibility_scope: string;
+      contact_email: string | null;
+    }>(
+      `
+        SELECT title, comp_name, author_name, moderation_status, visibility_scope, contact_email
+        FROM teams
+        WHERE id = @targetId
+      `,
+      { targetId: row.target_id }
+    );
+    return target
+      ? {
+          ...school,
+          targetTitle: target.title,
+          targetSummary: target.comp_name,
+          targetOwner: target.author_name,
+          targetStatus: target.moderation_status,
+          targetVisibilityScope: target.visibility_scope === 'cross_school' ? 'cross_school' as const : 'school' as const,
+          targetContactEmail: target.contact_email || undefined,
+        }
+      : {};
+  }
+
+  if (row.target_type === 'comment') {
+    const target = getOne<{
+      content: string;
+      author_name: string;
+      moderation_status: string;
+      post_title: string;
+    }>(
+      `
+        SELECT c.content, c.author_name, c.moderation_status, p.title AS post_title
+        FROM comments c
+        JOIN posts p ON p.id = c.post_id
+        WHERE c.id = @targetId
+      `,
+      { targetId: row.target_id }
+    );
+    return target
+      ? {
+          ...school,
+          targetTitle: target.post_title,
+          targetSummary: target.content,
+          targetOwner: target.author_name,
+          targetStatus: target.moderation_status,
+        }
+      : {};
+  }
+
+  if (row.target_type === 'report') {
+    const target = getOne<{
+      target_type: string;
+      target_id: string;
+      reason: string;
+      detail: string | null;
+      status: string;
+    }>(
+      `
+        SELECT target_type, target_id, reason, detail, status
+        FROM reports
+        WHERE id = @targetId
+      `,
+      { targetId: row.target_id }
+    );
+    return target
+      ? {
+          ...school,
+          targetTitle: target.reason,
+          targetSummary: `${target.target_type} / ${target.target_id}${target.detail ? ` / ${target.detail}` : ''}`,
+          targetStatus: target.status,
+        }
+      : {};
+  }
+
+  return school;
+}
+
 export function mapModerationTask(row: ModerationTaskRow): ModerationTaskItem {
+  const target = getModerationTargetSummary(row);
   return {
     id: row.id,
     targetType: row.target_type,
     targetId: row.target_id,
+    ...target,
     action: row.action,
     status: row.status,
     note: row.note || undefined,
@@ -427,6 +902,49 @@ export function resolveSession(token: string) {
     token: session.token,
     userId: session.user_id,
     mode: session.mode,
+    expiresAt: session.expires_at,
+  };
+}
+
+export function resolveAdminSession(token: string) {
+  if (!token) {
+    return null;
+  }
+
+  const session = getOne<AdminSessionRow>(
+    `
+      SELECT token, admin_user_id, role, expires_at, created_at
+      FROM admin_sessions
+      WHERE token = @token
+    `,
+    { token }
+  );
+
+  if (!session) {
+    return null;
+  }
+
+  if (Date.parse(session.expires_at) <= Date.now()) {
+    run(`DELETE FROM admin_sessions WHERE token = @token`, { token });
+    return null;
+  }
+
+  const admin = getOne<{ status: string; role: AdminUserRow['role']; school_id: string | null; school_name: string | null }>(
+    `SELECT status, role, school_id, school_name FROM admin_users WHERE id = @adminUserId`,
+    { adminUserId: session.admin_user_id }
+  );
+
+  if (!admin || admin.status !== 'active') {
+    run(`DELETE FROM admin_sessions WHERE token = @token`, { token });
+    return null;
+  }
+
+  return {
+    token: session.token,
+    adminUserId: session.admin_user_id,
+    role: admin.role,
+    schoolId: admin.school_id,
+    schoolName: admin.school_name,
     expiresAt: session.expires_at,
   };
 }

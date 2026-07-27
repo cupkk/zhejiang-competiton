@@ -17,16 +17,7 @@ export interface WechatLoginIdentity {
 }
 
 function buildMockIdentity(code: string): WechatLoginIdentity {
-  if (code === 'demo-code') {
-    return {
-      openId: 'mock:u1',
-      unionId: null,
-      sessionKey: null,
-      providerMode: 'mock',
-    };
-  }
-
-  const digest = createHash('sha256').update(code || 'demo-code').digest('hex').slice(0, 20);
+  const digest = createHash('sha256').update(code || 'mock-code').digest('hex').slice(0, 20);
   return {
     openId: `mock-${digest}`,
     unionId: null,
@@ -57,7 +48,7 @@ async function requestCode2Session(code: string): Promise<WechatCode2SessionResp
 
 export async function resolveWechatIdentity(code: string): Promise<WechatLoginIdentity> {
   const mode = serverConfig.wechat.loginMode;
-  const canUseWechat = hasWechatCredential() && code !== 'demo-code';
+  const canUseWechat = hasWechatCredential();
 
   if (mode === 'mock' || !canUseWechat) {
     if (mode === 'real' && !canUseWechat) {

@@ -1,33 +1,17 @@
 {
-  "miniprogramRoot": "dist/",
-  "projectname": "campus-growth-frontend",
-  "description": "Campus growth mini program frontend",
-  "appid": "wx2ce60daf5f409a63",
   "setting": {
-    "urlCheck": false,
-    "es6": false,
-    "enhance": false,
-    "compileHotReLoad": false,
-    "postcss": false,
-    "minified": false,
-    "compileWorklet": false,
+    "es6": true,
+    "postcss": true,
+    "minified": true,
     "uglifyFileName": false,
-    "uploadWithSourceMap": true,
-    "packNpmManually": false,
+    "enhance": true,
     "packNpmRelationList": [],
-    "minifyWXSS": true,
-    "minifyWXML": true,
-    "localPlugins": false,
-    "disableUseStrict": false,
-    "useCompilerPlugins": false,
-    "condition": false,
-    "swc": false,
-    "disableSWC": true,
     "babelSetting": {
       "ignore": [],
       "disablePlugins": [],
       "outputPath": ""
-    }
+    },
+    "useCompilerPlugins": false
   },
   "compileType": "miniprogram",
   "simulatorPluginLibVersion": {},
@@ -35,5 +19,6 @@
     "ignore": [],
     "include": []
   },
+  "appid": "wx2ce60daf5f409a63",
   "editorSetting": {}
 }

@@ -12,11 +12,15 @@ import {
   buildCurrentUser,
   createId,
   createModerationTask,
+  getRequiredVerifiedSchoolId,
   getAll,
+  getContentSchoolInfo,
   getOne,
+  isLikelyCorruptText,
   isCommentLiked,
   isFavorited,
   isPostLiked,
+  isContentAccessible,
   justNowLabel,
   mapComment,
   mapModerationTask,
@@ -24,29 +28,34 @@ import {
   nowIso,
   pushNotification,
   run,
+  requireContentAccessible,
 } from './helpers.ts';
 import type {
   CommentPayload,
   CommentMutationResult,
   CommentRow,
   LikeMutationResult,
+  AdminContentScope,
   ModerationTaskQuery,
   ModerationTaskRow,
   PostCommentItem,
   PostRow,
   ReportPayload,
+  ReportQuery,
   ReportResult,
   ReportRow,
   ReviewModerationPayload,
   ReviewModerationResult,
 } from './models.ts';
 
+const publicPostCategories = new Set(['资讯', '经验贴', '问答', '避坑']);
+
 function getPostRow(id: string) {
   const post = getOne<PostRow>(
     `
       SELECT id, title, excerpt, content_json, category, author_user_id, author_name, author_mark,
              likes_count, comments_count, tags_json, time_label, related_competition_id, related_resource_id,
-             moderation_status
+             question_status, accepted_comment_id, school_id, content_scope, moderation_status
       FROM posts
       WHERE id = @id
     `,
@@ -88,6 +97,34 @@ function requireVisible<T extends { moderation_status: string }>(row: T, userId?
   }
 
   throw new Error('content_not_available');
+}
+
+function requireSchoolVisible<T extends { content_scope?: string | null; school_id?: string | null }>(
+  row: T,
+  userId?: string,
+  _ownerId?: string | null
+) {
+  return requireContentAccessible(row, userId);
+}
+
+function isInCurrentSchoolScope(
+  row: { content_scope?: string | null; school_id?: string | null },
+  userId?: string,
+  _ownerId?: string | null
+) {
+  return isContentAccessible(row, userId);
+}
+
+function getRequiredActiveSchoolId(userId: string) {
+  return getRequiredVerifiedSchoolId(userId);
+}
+
+function isPostPublicInCurrentCommercialPhase(row: PostRow, userId?: string) {
+  if (publicPostCategories.has(row.category)) {
+    return true;
+  }
+
+  return Boolean(userId && row.author_user_id === userId);
 }
 
 function updatePostCommentCount(postId: string) {
@@ -132,29 +169,38 @@ function updateCommentLikeCount(commentId: string) {
   );
 }
 
-function ensureReportTargetExists(payload: ReportPayload) {
+function ensureReportTargetExists(userId: string, payload: ReportPayload) {
   if (payload.targetType === 'post') {
-    getPostRow(payload.targetId);
+    getPostDetail(payload.targetId, userId);
     return;
   }
 
   if (payload.targetType === 'comment') {
-    getCommentRow(payload.targetId);
+    const comment = getCommentRow(payload.targetId);
+    getPostDetail(comment.post_id, userId);
     return;
   }
 
   if (payload.targetType === 'team') {
-    const row = getOne<{ id: string }>(`SELECT id FROM teams WHERE id = @id`, { id: payload.targetId });
+    const row = getOne<{ id: string; school_id: string | null; content_scope: string; moderation_status: string }>(
+      `SELECT id, school_id, content_scope, moderation_status FROM teams WHERE id = @id`,
+      { id: payload.targetId }
+    );
     if (!row) {
       throw new Error('team_not_found');
     }
+    requireSchoolVisible(requireVisible(row, userId), userId);
     return;
   }
 
-  const resource = getOne<{ id: string }>(`SELECT id FROM resources WHERE id = @id`, { id: payload.targetId });
+  const resource = getOne<{ id: string; school_id: string | null; content_scope: string; moderation_status: string }>(
+    `SELECT id, school_id, content_scope, moderation_status FROM resources WHERE id = @id`,
+    { id: payload.targetId }
+  );
   if (!resource) {
     throw new Error('resource_not_found');
   }
+  requireSchoolVisible(requireVisible(resource, userId), userId);
 }
 
 function resolveCommentReplyContext(postId: string, payload: CommentPayload) {
@@ -200,37 +246,69 @@ export function listFeaturedPosts(limit = 2, userId?: string) {
     `
       SELECT id, title, excerpt, content_json, category, author_user_id, author_name, author_mark,
              likes_count, comments_count, tags_json, time_label, related_competition_id, related_resource_id,
-             moderation_status
+             question_status, accepted_comment_id, school_id, content_scope, moderation_status
       FROM posts
       WHERE moderation_status = 'approved'
       ORDER BY likes_count DESC, created_at DESC
       LIMIT @limit
     `,
     { limit }
-  ).map((row) => mapPost(row, userId));
+  )
+    .filter((row) => isInCurrentSchoolScope(row, userId, row.author_user_id))
+    .filter((row) => isPostPublicInCurrentCommercialPhase(row, userId))
+    .map((row) => mapPost(row, userId));
 }
 
 export function listPosts(query: PostQuery = {}, userId?: string) {
   const category = query.category ?? '推荐';
+  const keyword = query.keyword?.trim();
+  const relatedCompetitionId = query.relatedCompetitionId?.trim();
+  const questionFilter = query.questionFilter ?? 'latest';
   const rows = getAll<PostRow>(
     `
       SELECT id, title, excerpt, content_json, category, author_user_id, author_name, author_mark,
              likes_count, comments_count, tags_json, time_label, related_competition_id, related_resource_id,
-             moderation_status
+             question_status, accepted_comment_id, school_id, content_scope, moderation_status
       FROM posts
       WHERE moderation_status = 'approved'
+        AND (CAST(@relatedCompetitionId AS TEXT) IS NULL OR related_competition_id = CAST(@relatedCompetitionId AS TEXT))
+        AND (
+          @questionFilter <> 'unanswered'
+          OR (category = '问答' AND question_status = 'open' AND comments_count = 0)
+        )
+        AND (
+          @questionFilter <> 'resolved'
+          OR (category = '问答' AND question_status = 'resolved')
+        )
+        AND (
+          @keyword = ''
+          OR title LIKE @search
+          OR excerpt LIKE @search
+          OR content_json LIKE @search
+          OR tags_json LIKE @search
+        )
       ORDER BY created_at DESC
-    `
+    `,
+    {
+      keyword: keyword || '',
+      search: `%${keyword || ''}%`,
+      relatedCompetitionId: relatedCompetitionId || null,
+      questionFilter,
+    }
   );
 
-  return (category === '推荐' ? rows : rows.filter((item) => item.category === category)).map((row) =>
-    mapPost(row, userId)
-  );
+  return (category === '推荐' ? rows : rows.filter((item) => item.category === category))
+    .filter((row) => isInCurrentSchoolScope(row, userId, row.author_user_id))
+    .filter((row) => isPostPublicInCurrentCommercialPhase(row, userId))
+    .map((row) => mapPost(row, userId));
 }
 
 export function getPostDetail(id: string, userId?: string) {
   const row = getPostRow(id);
-  return mapPost(requireVisible(row, userId, row.author_user_id), userId);
+  if (!isPostPublicInCurrentCommercialPhase(row, userId)) {
+    throw new Error('content_not_available');
+  }
+  return mapPost(requireSchoolVisible(requireVisible(row, userId, row.author_user_id), userId, row.author_user_id), userId);
 }
 
 export function patchPostFavorite(userId: string, id: string, payload: ToggleFavoritePayload): FavoriteMutationResult {
@@ -261,9 +339,24 @@ export function patchPostFavorite(userId: string, id: string, payload: ToggleFav
 }
 
 export function createPost(userId: string, payload: PublishPostPayload) {
+  const title = payload.title.trim();
+  const rawContent = payload.content.trim();
+  if (!title || !rawContent) {
+    throw new Error('post_content_required');
+  }
+
   const user = buildCurrentUser(userId);
+  const schoolId = getRequiredActiveSchoolId(userId);
+  if (payload.relatedCompetitionId) {
+    const competition = getOne<{ id: string; school_id: string | null }>(
+      `SELECT id, school_id, content_scope FROM competitions WHERE id = @competitionId`,
+      { competitionId: payload.relatedCompetitionId }
+    );
+    if (!competition) throw new Error('competition_not_found');
+    requireSchoolVisible(competition, userId);
+  }
   const id = createId('p');
-  const content = payload.content
+  const content = rawContent
     .split(/\n+/)
     .map((item) => item.trim())
     .filter(Boolean);
@@ -271,24 +364,26 @@ export function createPost(userId: string, payload: PublishPostPayload) {
   run(
     `
       INSERT INTO posts (
-        id, title, excerpt, content_json, category, author_user_id, author_name, author_mark,
+        id, school_id, content_scope, title, excerpt, content_json, category, author_user_id, author_name, author_mark,
         likes_count, comments_count, tags_json, time_label, related_competition_id, related_resource_id,
-        moderation_status, created_at, updated_at
+        question_status, accepted_comment_id, moderation_status, created_at, updated_at
       ) VALUES (
-        @id, @title, @excerpt, @contentJson, @category, @authorUserId, @authorName, @authorMark,
-        0, 0, @tagsJson, @timeLabel, NULL, NULL, 'approved', @createdAt, @updatedAt
+        @id, @schoolId, 'school', @title, @excerpt, @contentJson, @category, @authorUserId, @authorName, @authorMark,
+        0, 0, @tagsJson, @timeLabel, @relatedCompetitionId, NULL, 'open', NULL, 'pending', @createdAt, @updatedAt
       )
     `,
     {
       id,
-      title: payload.title,
-      excerpt: payload.content.slice(0, 72),
+      schoolId,
+      title,
+      excerpt: rawContent.slice(0, 72),
       contentJson: JSON.stringify(content),
-      category: payload.category,
+      category: publicPostCategories.has(payload.category) ? payload.category : '经验贴',
       authorUserId: userId,
       authorName: user.name,
       authorMark: user.mark,
       tagsJson: JSON.stringify(payload.tags),
+      relatedCompetitionId: payload.relatedCompetitionId || null,
       timeLabel: justNowLabel(),
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -300,7 +395,7 @@ export function createPost(userId: string, payload: PublishPostPayload) {
 }
 
 export function listPostComments(postId: string, userId?: string): PostCommentItem[] {
-  getPostDetail(postId, userId);
+  const post = getPostDetail(postId, userId);
   const rows = getAll<CommentRow>(
     `
       SELECT id, post_id, user_id, parent_comment_id, reply_to_comment_id,
@@ -310,7 +405,7 @@ export function listPostComments(postId: string, userId?: string): PostCommentIt
       ORDER BY created_at ASC
     `,
     { postId }
-  );
+  ).filter((row) => !isLikelyCorruptText(row.content));
 
   const rowById = new Map(rows.map((row) => [row.id, row]));
   const commentById = new Map(
@@ -318,6 +413,7 @@ export function listPostComments(postId: string, userId?: string): PostCommentIt
       row.id,
       mapComment(row, isCommentLiked(userId, row.id), {
         replyToAuthorName: row.reply_to_comment_id ? rowById.get(row.reply_to_comment_id)?.author_name : undefined,
+        isAccepted: post.acceptedCommentId === row.id,
       }),
     ])
   );
@@ -338,10 +434,49 @@ export function listPostComments(postId: string, userId?: string): PostCommentIt
     roots.push(comment);
   }
 
-  return roots.reverse();
+  for (const root of roots) {
+    root.replies?.sort((left, right) => Number(Boolean(right.isAccepted)) - Number(Boolean(left.isAccepted)));
+  }
+  return roots.reverse().sort((left, right) => Number(Boolean(right.isAccepted)) - Number(Boolean(left.isAccepted)));
+}
+
+export function acceptPostAnswer(userId: string, postId: string, commentId: string) {
+  const postRow = getPostRow(postId);
+  requireSchoolVisible(requireVisible(postRow, userId, postRow.author_user_id), userId, postRow.author_user_id);
+  if (postRow.author_user_id !== userId) throw new Error('post_answer_forbidden');
+  if (postRow.category !== '问答') throw new Error('post_not_question');
+
+  const comment = getCommentRow(commentId);
+  if (comment.post_id !== postId || comment.moderation_status !== 'approved') {
+    throw new Error('post_answer_invalid');
+  }
+
+  run(
+    `
+      UPDATE posts
+      SET question_status = 'resolved', accepted_comment_id = @commentId, updated_at = @updatedAt
+      WHERE id = @postId
+    `,
+    { postId, commentId, updatedAt: nowIso() }
+  );
+
+  if (comment.user_id !== userId) {
+    pushNotification(comment.user_id, {
+      category: '系统',
+      title: '你的回答已被采纳',
+      content: `你在「${postRow.title}」下的回答已被发帖人采纳。`,
+      linkType: 'post',
+      linkId: postId,
+      commentId,
+      ctaText: '查看问答',
+    });
+  }
+
+  return getPostDetail(postId, userId);
 }
 
 export function createPostComment(userId: string, postId: string, payload: CommentPayload): CommentMutationResult {
+  getRequiredActiveSchoolId(userId);
   const post = getPostDetail(postId, userId);
   const user = buildCurrentUser(userId);
   const commentId = createId('comment');
@@ -354,7 +489,7 @@ export function createPostComment(userId: string, postId: string, payload: Comme
         author_name, author_mark, content, likes_count, moderation_status, created_at, updated_at
       ) VALUES (
         @id, @postId, @userId, @parentCommentId, @replyToCommentId,
-        @authorName, @authorMark, @content, 0, 'approved', @createdAt, @updatedAt
+        @authorName, @authorMark, @content, 0, 'pending', @createdAt, @updatedAt
       )
     `,
     {
@@ -371,7 +506,6 @@ export function createPostComment(userId: string, postId: string, payload: Comme
     }
   );
 
-  updatePostCommentCount(postId);
   createModerationTask('comment', commentId, 'comment_review', '新评论进入审核队列');
 
   const postRow = getPostRow(postId);
@@ -415,7 +549,7 @@ export function createPostComment(userId: string, postId: string, payload: Comme
     postId,
     parentCommentId: replyContext.parentComment?.id || undefined,
     replyToCommentId: replyContext.replyToComment?.id || undefined,
-    status: 'approved',
+    status: 'pending',
   };
 }
 
@@ -446,7 +580,8 @@ export function togglePostLike(userId: string, postId: string, liked: boolean): 
 }
 
 export function toggleCommentLike(userId: string, commentId: string, liked: boolean): LikeMutationResult {
-  getCommentRow(commentId);
+  const comment = getCommentRow(commentId);
+  getPostDetail(comment.post_id, userId);
   const existing = getOne<{ id: string }>(
     `SELECT id FROM comment_likes WHERE user_id = @userId AND comment_id = @commentId`,
     { userId, commentId }
@@ -474,7 +609,7 @@ export function toggleCommentLike(userId: string, commentId: string, liked: bool
 }
 
 export function createReport(userId: string, payload: ReportPayload): ReportResult {
-  ensureReportTargetExists(payload);
+  ensureReportTargetExists(userId, payload);
   const reportId = createId('report');
   run(
     `
@@ -499,33 +634,62 @@ export function createReport(userId: string, payload: ReportPayload): ReportResu
   return { reportId, status: 'pending' };
 }
 
-export function listReports() {
+function getEffectiveAdminSchoolId(scope?: AdminContentScope, requestedSchoolId?: string) {
+  if (scope?.role === 'school_admin') {
+    return scope.schoolId || '__no_school_scope__';
+  }
+
+  const value = requestedSchoolId?.trim();
+  return value && value !== 'all' ? value : '';
+}
+
+function isAdminSchoolVisible(schoolId: string | undefined, scope?: AdminContentScope, requestedSchoolId?: string) {
+  const effectiveSchoolId = getEffectiveAdminSchoolId(scope, requestedSchoolId);
+  return !effectiveSchoolId || schoolId === effectiveSchoolId;
+}
+
+export function listReports(query: ReportQuery = {}, scope?: AdminContentScope) {
   return getAll<ReportRow>(
     `
       SELECT id, reporter_user_id, target_type, target_id, reason, detail, status, created_at, updated_at
       FROM reports
       ORDER BY created_at DESC
     `
-  );
+  )
+    .map((row) => {
+      const school = getContentSchoolInfo(row.target_type, row.target_id);
+      return {
+        ...row,
+        school_id: school.schoolId,
+        school_name: school.schoolName,
+      };
+    })
+    .filter((row) => isAdminSchoolVisible(row.school_id, scope, query.schoolId));
 }
 
-export function listModerationTasks(query: ModerationTaskQuery = {}) {
+export function listModerationTasks(query: ModerationTaskQuery = {}, scope?: AdminContentScope) {
   return getAll<ModerationTaskRow>(
     `
       SELECT id, target_type, target_id, action, status, note, created_at, reviewed_at
       FROM moderation_tasks
-      WHERE (@status IS NULL OR status = @status)
-        AND (@targetType IS NULL OR target_type = @targetType)
+      WHERE (CAST(@status AS TEXT) IS NULL OR status = CAST(@status AS TEXT))
+        AND (CAST(@targetType AS TEXT) IS NULL OR target_type = CAST(@targetType AS TEXT))
       ORDER BY created_at DESC
     `,
     {
       status: query.status || null,
       targetType: query.targetType || null,
     }
-  ).map(mapModerationTask);
+  )
+    .map(mapModerationTask)
+    .filter((item) => isAdminSchoolVisible(item.schoolId, scope, query.schoolId));
 }
 
-export function reviewModerationTask(taskId: string, payload: ReviewModerationPayload): ReviewModerationResult {
+export function reviewModerationTask(
+  taskId: string,
+  payload: ReviewModerationPayload,
+  scope?: AdminContentScope
+): ReviewModerationResult {
   const task = getOne<ModerationTaskRow>(
     `
       SELECT id, target_type, target_id, action, status, note, created_at, reviewed_at
@@ -539,30 +703,137 @@ export function reviewModerationTask(taskId: string, payload: ReviewModerationPa
     throw new Error('moderation_task_not_found');
   }
 
-  if (task.target_type === 'post') {
+  const taskSchool = getContentSchoolInfo(task.target_type, task.target_id);
+  if (!isAdminSchoolVisible(taskSchool.schoolId, scope)) {
+    throw new Error('admin_scope_forbidden');
+  }
+
+  const nextContentStatus = payload.status === 'approved' || payload.status === 'rejected' ? payload.status : null;
+
+  if (task.target_type === 'post' && nextContentStatus) {
+    const post = getOne<{ author_user_id: string | null; title: string }>(
+      `
+        SELECT author_user_id, title
+        FROM posts
+        WHERE id = @targetId
+      `,
+      { targetId: task.target_id }
+    );
+
     run(`UPDATE posts SET moderation_status = @status, updated_at = @updatedAt WHERE id = @targetId`, {
-      status: payload.status === 'rejected' ? 'rejected' : 'approved',
+      status: nextContentStatus,
       updatedAt: nowIso(),
       targetId: task.target_id,
     });
+
+    if (post?.author_user_id) {
+      pushNotification(post.author_user_id, {
+        category: '审核',
+        title: payload.status === 'approved' ? '帖子审核已通过' : '帖子审核未通过',
+        content:
+          payload.status === 'approved'
+            ? `你发布的「${post.title}」已公开显示。`
+            : `你发布的「${post.title}」未通过审核，请调整后重新提交。`,
+        linkType: 'post',
+        linkId: task.target_id,
+        ctaText: '查看帖子',
+      });
+    }
   }
 
-  if (task.target_type === 'comment') {
+  if (task.target_type === 'comment' && nextContentStatus) {
     run(`UPDATE comments SET moderation_status = @status, updated_at = @updatedAt WHERE id = @targetId`, {
-      status: payload.status === 'rejected' ? 'rejected' : 'approved',
+      status: nextContentStatus,
       updatedAt: nowIso(),
       targetId: task.target_id,
     });
     const comment = getCommentRow(task.target_id);
     updatePostCommentCount(comment.post_id);
+    const post = getOne<{ title: string }>(`SELECT title FROM posts WHERE id = @postId`, { postId: comment.post_id });
+    pushNotification(comment.user_id, {
+      category: '审核',
+      title: payload.status === 'approved' ? '评论审核已通过' : '评论审核未通过',
+      content:
+        payload.status === 'approved'
+          ? `你在「${post?.title || '帖子'}」下的评论已公开显示。`
+          : `你在「${post?.title || '帖子'}」下的评论未通过审核。`,
+      linkType: 'post',
+      linkId: comment.post_id,
+      commentId: comment.id,
+      ctaText: '查看帖子',
+    });
   }
 
-  if (task.target_type === 'team') {
+  if (task.target_type === 'team' && nextContentStatus) {
+    const team = getOne<{ author_user_id: string | null; title: string }>(
+      `
+        SELECT author_user_id, title
+        FROM teams
+        WHERE id = @targetId
+      `,
+      { targetId: task.target_id }
+    );
+
     run(`UPDATE teams SET moderation_status = @status, updated_at = @updatedAt WHERE id = @targetId`, {
-      status: payload.status === 'rejected' ? 'rejected' : 'approved',
+      status: nextContentStatus,
       updatedAt: nowIso(),
       targetId: task.target_id,
     });
+
+    if (team?.author_user_id) {
+      pushNotification(team.author_user_id, {
+        category: '审核',
+        title: payload.status === 'approved' ? '组队招募已通过' : '组队招募未通过',
+        content:
+          payload.status === 'approved'
+            ? `你发布的「${team.title}」已出现在组队大厅。`
+            : `你发布的「${team.title}」未通过审核，请调整后重新提交。`,
+        linkType: 'team',
+        linkId: task.target_id,
+        ctaText: '查看队伍',
+      });
+    }
+  }
+
+  if (task.target_type === 'resource' && nextContentStatus) {
+    const resource = getOne<{ author_user_id: string | null; title: string }>(
+      `
+        SELECT author_user_id, title
+        FROM resources
+        WHERE id = @targetId
+      `,
+      { targetId: task.target_id }
+    );
+
+    run(
+      `
+        UPDATE resources
+        SET moderation_status = @status,
+            review_note = @reviewNote,
+            updated_at = @updatedAt
+        WHERE id = @targetId
+      `,
+      {
+        status: nextContentStatus,
+        reviewNote: payload.note || null,
+        updatedAt: nowIso(),
+        targetId: task.target_id,
+      }
+    );
+
+    if (resource?.author_user_id) {
+      pushNotification(resource.author_user_id, {
+        category: '审核',
+        title: payload.status === 'approved' ? '资源审核已通过' : '资源审核未通过',
+        content:
+          payload.status === 'approved'
+            ? `资源《${resource.title}》已审核通过，现在会出现在资源列表中。`
+            : `资源《${resource.title}》未通过审核，请根据审核说明调整后重新投稿。`,
+        linkType: 'resource',
+        linkId: task.target_id,
+        ctaText: '查看资源',
+      });
+    }
   }
 
   if (task.target_type === 'report') {

@@ -1,0 +1,12 @@
+[Unit]
+Description=Campus Growth competition news sync
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=campus
+Group=campus
+WorkingDirectory=/opt/campus-growth/current
+EnvironmentFile=/etc/campus-growth/api.env
+ExecStart=/usr/local/bin/npm run sync:competition-news -- --limit=12 --apply

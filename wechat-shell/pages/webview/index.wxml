@@ -1,0 +1,8 @@
+<view class="shell">
+  <view wx:if="{{loading}}" class="loading">
+    <view class="spinner"></view>
+    <view class="subtitle">正在进入</view>
+  </view>
+
+  <web-view wx:if="{{webUrl}}" src="{{webUrl}}"></web-view>
+</view>

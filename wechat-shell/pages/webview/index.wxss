@@ -1,0 +1,33 @@
+.shell {
+  min-height: 100vh;
+  background: #f6f8fb;
+}
+
+.loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18rpx;
+  color: #172033;
+}
+
+.spinner {
+  width: 34rpx;
+  height: 34rpx;
+  border: 4rpx solid #d1d5db;
+  border-top-color: #111827;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.subtitle {
+  font-size: 28rpx;
+  color: #687386;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

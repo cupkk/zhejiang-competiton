@@ -4,8 +4,36 @@ dist/
 coverage/
 .DS_Store
 *.log
-*.err
-server/data/*.db
-server/data/*.db-*
 .env*
 !.env.example
+
+# Local credentials and release artifacts
+/.deploy/
+*.pem
+*.key
+*.p12
+
+# Runtime data
+/server/data/
+/server/storage/
+*.db
+*.sqlite
+*.sqlite3
+*.pid
+*.err
+
+# Browser and test artifacts
+/output/
+/test-results/
+/.playwright-cli/
+/.playwright-mcp/
+/audit-*
+/production-beta-*
+/wechat-smoke-*
+/*.png
+/*.jpg
+/*.jpeg
+
+# Local IDE and reference material
+*.private.config.json
+/参考/
