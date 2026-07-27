@@ -541,3 +541,5 @@
 - 暂存范围包含当前 React/Vite 用户端、Express API、微信壳、管理员端、学校数据、官方内容巡检、生产部署模板、自动化测试、商业计划和中文实验日志。
 - 推送前扫描未发现微信 AppSecret、SSH 私钥正文、云访问密钥或真实管理员密码；`.env.example` 仅保留明确占位值。
 - 最后验证基线：`npm run verify:local-release` 通过，生产 release `20260727224653` 健康，微信开发版本 `0.1.24` 已上传。
+- 主迁移提交：`eb7fc13 feat: rebuild campus growth platform for internal beta`，已推送到 `origin/main`。
+- 默认 Windows Schannel 首次握手失败；使用单次命令参数 `git -c http.sslBackend=openssl push origin main` 成功，没有关闭 SSL 校验，也没有修改全局 Git 配置或强推。
